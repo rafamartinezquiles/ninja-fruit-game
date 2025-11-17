@@ -1,1 +1,1 @@
-# ninja-fruit-game
+# Design and Development of a Real-Time Gesture-Controlled Fruit-Slicing Game Using Computer Vision
