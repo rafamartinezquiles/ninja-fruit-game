@@ -5,7 +5,7 @@ import math
 import numpy as np
 import mediapipe as mp
 from collections import deque
-import os  # <-- added
+import os  # for paths
 
 # ============================
 # Paths: images/ is next to src/
@@ -45,7 +45,7 @@ SCORE_PER_LEVEL = 1000       # every 1000 points, difficulty increases
 
 # Slash (finger trail) configuration
 SLASH_MAX_POINTS = 19        # how long the trail is
-SLASH_THICKNESS = 15
+SLASH_THICKNESS = 5          # <<< thinner slash line
 
 # Fruit movement speed (initial)
 INITIAL_FRUIT_VELOCITY = np.array([0, -5], dtype=np.int32)  # [vx, vy]
@@ -53,7 +53,7 @@ INITIAL_FRUIT_VELOCITY = np.array([0, -5], dtype=np.int32)  # [vx, vy]
 # Spawning
 INITIAL_SPAWN_RATE = 1.0     # fruits per second
 
-# Fruit logos - NOTE: now using ../images/ paths
+# Fruit logos (with paths to ../images)
 FRUIT_IMAGE_FILES = [
     os.path.join(ASSETS_DIR, "apple.png"),
     os.path.join(ASSETS_DIR, "banana.png"),
@@ -72,8 +72,7 @@ def load_fruit_sprites(file_list):
     """
     sprites = []
     for path in file_list:
-        # IMREAD_UNCHANGED keeps the alpha channel (transparency) if it exists
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)  # keep alpha
         if img is not None:
             sprites.append(img)
         else:
@@ -94,52 +93,45 @@ def draw_sprite_centered(frame, sprite, center, size):
     """
     Draw a sprite (with possible alpha channel) on 'frame',
     centered at 'center' (x, y), scaled to 'size' x 'size'.
-
-    If the sprite has 4 channels (BGRA), use alpha blending.
-    Otherwise, just overwrite pixels.
     """
     if sprite is None:
         return
 
-    # Resize the sprite to the desired size
     sprite_resized = cv2.resize(sprite, (size, size), interpolation=cv2.INTER_AREA)
 
     h, w, _ = frame.shape
     cx, cy = center
 
-    # Calculate top-left corner such that sprite is centered
+    # top-left of sprite
     x1 = int(cx - size / 2)
     y1 = int(cy - size / 2)
     x2 = x1 + size
     y2 = y1 + size
 
-    # Clip to the frame boundaries
+    # completely off screen?
     if x1 >= w or y1 >= h or x2 <= 0 or y2 <= 0:
-        return  # completely off-screen
+        return
 
+    # clip to frame
     x1_clip = max(x1, 0)
     y1_clip = max(y1, 0)
     x2_clip = min(x2, w)
     y2_clip = min(y2, h)
 
-    # Compute corresponding coordinates on the sprite
     sprite_x1 = x1_clip - x1
     sprite_y1 = y1_clip - y1
     sprite_x2 = sprite_x1 + (x2_clip - x1_clip)
     sprite_y2 = sprite_y1 + (y2_clip - y1_clip)
 
-    # Extract regions
     roi = frame[y1_clip:y2_clip, x1_clip:x2_clip]
     sprite_roi = sprite_resized[sprite_y1:sprite_y2, sprite_x1:sprite_x2]
 
     if sprite_roi.shape[2] == 4:
-        # Sprite has alpha channel (BGRA)
+        # BGRA
         sprite_rgb = sprite_roi[..., :3]
-        alpha = sprite_roi[..., 3:] / 255.0  # normalize alpha to [0,1]
-        # Blend sprite with background
+        alpha = sprite_roi[..., 3:] / 255.0
         roi[:] = (1.0 - alpha) * roi + alpha * sprite_rgb
     else:
-        # No alpha channel, simple overwrite
         roi[:] = sprite_roi
 
 
@@ -149,11 +141,7 @@ def draw_sprite_centered(frame, sprite, center, size):
 
 class Fruit:
     """
-    Represents a single fruit on screen:
-    - position
-    - velocity
-    - color (for slash color effect)
-    - sprite (image)
+    Represents a single fruit on screen.
     """
     def __init__(self, start_position, velocity, color, sprite):
         self.position = np.array(start_position, dtype=np.int32)
@@ -162,23 +150,15 @@ class Fruit:
         self.sprite = sprite
 
     def update(self):
-        """Move the fruit according to its velocity."""
         self.position += self.velocity
 
     def draw(self, frame):
-        """Draw the fruit sprite (or fallback circle) on the frame."""
         if self.sprite is not None:
             draw_sprite_centered(frame, self.sprite, tuple(self.position), FRUIT_SIZE)
         else:
-            # Fallback to a simple circle if sprite missing
             cv2.circle(frame, tuple(self.position), FRUIT_RADIUS, self.color, -1)
 
     def is_out_of_bounds(self, frame_width, frame_height):
-        """
-        Check if the fruit has left the playable area.
-        Here we consider 'out' if it goes above the top
-        or far off to the right or left.
-        """
         x, y = self.position
         if y < 0 or x < 0 or x > frame_width + 50:
             return True
@@ -189,47 +169,63 @@ class Fruit:
 # Game state initialization
 # ============================
 
-# Camera
 cap = cv2.VideoCapture(0)
 
-# Will be updated after first frame
 frame_width = 0
 frame_height = 0
 
-# Time/FPS
 previous_frame_time = time.time()
 
-# Game variables
 current_score = 0
 current_level = 1
 player_lives = INITIAL_LIVES
 game_over = False
 
-# Difficulty / spawn control
 fruit_velocity_base = INITIAL_FRUIT_VELOCITY.copy()
-spawn_rate = INITIAL_SPAWN_RATE           # fruits per second
+spawn_rate = INITIAL_SPAWN_RATE
 next_spawn_time = 0.0
 next_level_score_threshold = SCORE_PER_LEVEL
 
-# Slash trail: queue of recent fingertip positions
 slash_points = deque(maxlen=SLASH_MAX_POINTS)
-slash_color = (255, 255, 255)  # initial slash color (white)
+slash_color = (255, 255, 255)
 
-# List of active fruit objects
 active_fruits = []
 
-# Load fruit sprites once at start
 fruit_sprites = load_fruit_sprites(FRUIT_IMAGE_FILES)
+
+# NEW: start menu flag
+game_started = False
+
+
+def reset_game():
+    """
+    Reset all game-related variables (called when starting or restarting).
+    """
+    global current_score, current_level, player_lives, game_over
+    global fruit_velocity_base, spawn_rate, next_spawn_time
+    global next_level_score_threshold, active_fruits, slash_points, slash_color
+
+    current_score = 0
+    current_level = 1
+    player_lives = INITIAL_LIVES
+    game_over = False
+
+    fruit_velocity_base = INITIAL_FRUIT_VELOCITY.copy()
+    spawn_rate = INITIAL_SPAWN_RATE
+    next_spawn_time = time.time()
+    next_level_score_threshold = SCORE_PER_LEVEL
+
+    active_fruits = []
+    slash_points.clear()
+    slash_color = (255, 255, 255)
 
 
 def spawn_fruit():
     """
     Create a new fruit at a random x-position near the bottom of the frame.
-    Uses a random color and a random sprite from 'fruit_sprites'.
     """
     global active_fruits, frame_width, frame_height
 
-    # If size is still unknown (no frame yet), pick a reasonable default range
     if frame_width == 0:
         spawn_x = random.randint(15, 600)
         spawn_y = 440
@@ -237,14 +233,12 @@ def spawn_fruit():
         spawn_x = random.randint(15, max(16, frame_width - 15))
         spawn_y = frame_height - 40
 
-    # Random color (used for slash effect)
     random_color = (
         random.randint(0, 255),
         random.randint(0, 255),
         random.randint(0, 255)
     )
 
-    # Pick a random sprite from the loaded list (may be empty)
     sprite = random.choice(fruit_sprites) if fruit_sprites else None
 
     new_fruit = Fruit(
@@ -268,24 +262,15 @@ while cap.isOpened():
 
     frame_height, frame_width, _ = frame.shape
 
-    # Flip horizontally so it feels like a mirror, then convert to RGB for Mediapipe
     frame_rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
     frame_rgb.flags.writeable = False
-
-    # Run hand tracking
     results = hand_tracker.process(frame_rgb)
-
-    # Convert back to BGR for OpenCV drawing
     frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-    # =======================
-    # Hand landmarks & slash
-    # =======================
-    fingertip_position = None  # index fingertip (landmark 8)
+    fingertip_position = None
 
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
-            # Draw hand landmarks on screen
             mp_drawing.draw_landmarks(
                 frame,
                 hand_landmarks,
@@ -294,49 +279,68 @@ while cap.isOpened():
                 mp_drawing_styles.get_default_hand_connections_style()
             )
 
-            # Iterate over landmarks to find index fingertip (id == 8)
             for landmark_id, lm in enumerate(hand_landmarks.landmark):
                 if landmark_id == 8:
                     x_px = int(lm.x * frame_width)
                     y_px = int(lm.y * frame_height)
                     fingertip_position = (x_px, y_px)
 
-                    # Optionally draw a small circle at the fingertip
-                    cv2.circle(frame, fingertip_position, 18, slash_color, -1)
+                    # thinner fingertip marker to match thinner slash
+                    cv2.circle(frame, fingertip_position, 10, slash_color, -1)
 
-                    # Save position to slash trail
                     slash_points.append(fingertip_position)
 
     # =======================
-    # Check fruit slicing
+    # If game hasn't started: show menu and skip game logic
     # =======================
-    if fingertip_position is not None:
-        # We iterate over a copy of the list so we can safely remove fruits
+    if not game_started:
+        title = "FRUIT SLASH"
+        instruction = "Press ENTER to start"
+        quit_msg = "Press Q to quit"
+
+        cv2.putText(frame, title,
+                    (int(frame_width * 0.1), int(frame_height * 0.3)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 3)
+
+        cv2.putText(frame, instruction,
+                    (int(frame_width * 0.1), int(frame_height * 0.5)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+        cv2.putText(frame, quit_msg,
+                    (int(frame_width * 0.1), int(frame_height * 0.6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+        # Show current camera frame with menu text
+        cv2.imshow("Fruit Slash", frame)
+
+        key = cv2.waitKey(5) & 0xFF
+        if key == ord('q'):
+            break
+        if key == 13:  # ENTER key
+            reset_game()
+            game_started = True
+        continue  # go to next loop iteration, skip game logic
+
+    # =======================
+    # Check fruit slicing (only when game started)
+    # =======================
+    if fingertip_position is not None and not game_over:
         for fruit in list(active_fruits):
             dist = euclidean_distance(fingertip_position, fruit.position)
-
-            # Debug: show distance on top of the fruit (optional)
-            # cv2.putText(frame, str(dist), tuple(fruit.position),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-
             if dist < FRUIT_RADIUS:
-                # Fruit sliced!
                 current_score += POINTS_PER_FRUIT
-                slash_color = fruit.color  # change slash color to fruit color
+                slash_color = fruit.color
                 active_fruits.remove(fruit)
 
     # =======================
     # Difficulty scaling
     # =======================
     if current_score >= next_level_score_threshold:
-        # Level up
         current_level += 1
         next_level_score_threshold += SCORE_PER_LEVEL
 
-        # Increase spawn rate and fruit speed
         spawn_rate = current_level * 4.0 / 5.0
-        fruit_velocity_base[0] = int(fruit_velocity_base[0] * 1.0)  # horizontal speed (if you want)
-        fruit_velocity_base[1] = int(-5 * current_level / 2)        # faster upward movement
+        fruit_velocity_base[1] = int(-5 * current_level / 2)
 
         print(f"Level up! -> Level {current_level}")
         print("New base velocity:", fruit_velocity_base, "New spawn rate:", spawn_rate)
@@ -348,27 +352,21 @@ while cap.isOpened():
         game_over = True
 
     if not game_over:
-        # Spawn fruits based on time
         current_time = time.time()
         if current_time > next_spawn_time:
             spawn_fruit()
-            # Next spawn time: now + (1 / spawn_rate) seconds
             next_spawn_time = current_time + (1.0 / spawn_rate)
 
-        # Update and draw fruits
         for fruit in list(active_fruits):
             fruit.update()
             fruit.draw(frame)
 
             if fruit.is_out_of_bounds(frame_width, frame_height):
-                # Player missed this fruit -> lose a life
                 player_lives -= 1
                 active_fruits.remove(fruit)
-
                 if player_lives <= 0:
                     game_over = True
     else:
-        # Game over screen
         cv2.putText(
             frame,
             "GAME OVER",
@@ -378,15 +376,24 @@ while cap.isOpened():
             (0, 0, 255),
             3
         )
+        cv2.putText(
+            frame,
+            "Press ENTER to restart",
+            (int(frame_width * 0.1), int(frame_height * 0.75)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (255, 255, 255),
+            2
+        )
         active_fruits.clear()
 
     # =======================
     # Draw slash trail
     # =======================
     if len(slash_points) > 1:
-        # polylines expects an array of shape (n_points, 1, 2)
         slash_array = np.array(slash_points, dtype=np.int32).reshape((-1, 1, 2))
-        cv2.polylines(frame, [slash_array], False, slash_color, SLASH_THICKNESS, lineType=cv2.LINE_AA)
+        cv2.polylines(frame, [slash_array], False, slash_color,
+                      SLASH_THICKNESS, lineType=cv2.LINE_AA)
 
     # =======================
     # FPS calculation and HUD
@@ -394,11 +401,8 @@ while cap.isOpened():
     current_frame_time = time.time()
     delta_time = current_frame_time - previous_frame_time
     previous_frame_time = current_frame_time
-
-    # Avoid division by zero for FPS
     fps = int(1 / delta_time) if delta_time > 0 else 0
 
-    # Heads-Up Display (HUD): FPS, score, level, lives
     cv2.putText(frame, f"FPS: {fps}", (int(frame_width * 0.82), 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 250, 0), 2)
 
@@ -412,13 +416,16 @@ while cap.isOpened():
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
     # =======================
-    # Show frame and handle quit
+    # Show frame and handle keys
     # =======================
     cv2.imshow("Fruit Slash", frame)
 
-    # Press 'q' to quit
-    if cv2.waitKey(5) & 0xFF == ord("q"):
+    key = cv2.waitKey(5) & 0xFF
+    if key == ord('q'):
         break
+    if game_over and key == 13:  # ENTER to restart after game over
+        reset_game()
+        game_started = True
 
 # Cleanup
 cap.release()
