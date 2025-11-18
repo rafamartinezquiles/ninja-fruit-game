@@ -51,3 +51,10 @@ git clone https://github.com/rafamartinezquiles/ninja-fruit-game.git
 cd ninja-fruit-game
 pip install -r requirements.txt
 ```
+
+### Usage
+To use this project, simply run the command below. Once the camera window opens, press Enter when you're ready to play, and the game will begin!
+
+```bash
+python src/main.py
+```
