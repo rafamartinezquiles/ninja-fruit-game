@@ -1,5 +1,6 @@
 # Design and Development of a Real-Time Gesture-Controlled Fruit-Slicing Game Using Computer Vision
 This project uses modern computer-vision techniques to create an interactive, gesture-controlled fruit-slicing game. Using a standard webcam together with OpenCV, MediaPipe Hands, and NumPy, the system tracks the player’s index finger in real time and turns it into a “blade” that slices falling fruit icons on the screen. A simple game loop manages fruit spawning, collision detection, scoring, lives, and dynamic difficulty to deliver a responsive and engaging experience.
+
 ![](images/demo.gif)
 
 ## Overview and Background
